@@ -1,0 +1,112 @@
+"""
+Block 7: homology BASIS extraction.
+
+Betti numbers follow from ranks alone (Proposition 3.13). Generators require
+more: the change-of-basis matrix Q from the reduction tells you which
+combination of original simplices each cycle is.
+
+Following Nanda, Proposition 3.15:
+    Z_k = ker d_k        <- non-pivot columns of Q from reducing d_k
+    B_k = img d_{k+1}    <- independent columns of d_{k+1}
+    H_k = Z_k / B_k
+
+Form G = [B_k | Z_k] with the boundaries FIRST, reduce, and keep the columns
+of the Z_k block that acquire their own pivot. Those represent a basis for
+H_k; the ones that do not were already boundaries and vanish in the quotient.
+"""
+
+from core import boundary_matrix_f2, smith_f2
+
+
+def reduce_columns_f2(columns):
+    """
+    Gaussian elimination over F_2 on a list of column-sets.
+    Returns the indices of the columns that survive with their own pivot,
+    i.e. an independent subset.
+    """
+    pivot_of_row = {}
+    independent = []
+    work = [set(c) for c in columns]
+
+    for j, col in enumerate(work):
+        changed = True
+        while changed:
+            changed = False
+            for r in list(col):
+                if r in pivot_of_row:
+                    owner = pivot_of_row[r]
+                    col = col.symmetric_difference(work[owner])
+                    changed = True
+                    break
+        work[j] = col
+        if col:
+            pivot_of_row[min(col)] = j
+            independent.append(j)
+
+    return independent
+
+
+def cycle_basis(K, k):
+    """
+    Z_k = ker d_k.
+    Returns (cycles, labels) where each cycle is a set of indices into
+    labels = K.k_simplices(k).
+    """
+    mat, rows, cols = boundary_matrix_f2(K, k)
+    if not cols:
+        return [], []
+    if k == 0:
+        # d_0 = 0, so every 0-chain is a cycle
+        return [{j} for j in range(len(cols))], cols
+    rank, Q, non_pivot = smith_f2(mat, len(rows), len(cols))
+    return [Q[j] for j in non_pivot], cols
+
+
+def boundary_basis(K, k):
+    """
+    B_k = img d_{k+1}, expressed in the basis of k-simplices.
+    The columns of d_{k+1} ARE the boundaries; take an independent subset.
+    """
+    mat, rows, cols = boundary_matrix_f2(K, k + 1)
+    if not cols:
+        return []
+    return [mat[j] for j in reduce_columns_f2(mat)]
+
+
+def homology_basis(K, k):
+    """
+    A basis for H_k = Z_k / B_k (Nanda, Proposition 3.15).
+    Returns (generators, labels).
+    """
+    Z, labels = cycle_basis(K, k)
+    B = boundary_basis(K, k)
+
+    if not Z:
+        return [], labels
+
+    G = B + Z                    # boundaries first, so they claim pivots first
+    n_B = len(B)
+
+    independent = reduce_columns_f2(G)
+
+    # keep only survivors from the Z block, and shift the index back
+    return [Z[j - n_B] for j in independent if j >= n_B], labels
+
+
+def describe_homology(K, max_dim=None, verbose=True):
+    """Homology with explicit generators, printed readably."""
+    if max_dim is None:
+        max_dim = K.dimension()
+
+    out = {}
+    for k in range(max_dim + 1):
+        gens, labels = homology_basis(K, k)
+        out[k] = {'betti': len(gens), 'generators': gens, 'labels': labels}
+        if verbose:
+            print(f"H_{k}:  beta = {len(gens)}")
+            for i, g in enumerate(gens):
+                chain = " + ".join("".join(map(str, labels[j])) for j in sorted(g))
+                print(f"    generator {i+1}: {chain}")
+            if not gens:
+                print("    (trivial)")
+    return out
