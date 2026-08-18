@@ -1,0 +1,189 @@
+"""
+Experiment: when do elementary collapses actually help?
+
+An elementary collapse requires a free face -- a codimension-one face with
+exactly one coface. Dense Vietoris-Rips complexes have high coface counts
+everywhere, so free faces disappear and collapsing becomes impossible.
+
+Sweep 1 varies the Rips scale at fixed point count, recording both the
+collapse reduction and the minimum coface count. Sweep 2 fixes a sparse
+scale and varies the point count.
+
+Requires: core.py in the same directory, plus gudhi, numpy, matplotlib.
+"""
+
+import time
+import numpy as np
+import gudhi
+
+from core import SimplicialComplex, compute_homology, collapse, min_coface_count
+
+
+# =============================================================
+# helpers
+# =============================================================
+
+def make_circle_rips(n, eps, max_dim=2, seed=42):
+    """Vietoris-Rips complex on n noisy points sampled from a unit circle."""
+    np.random.seed(seed)
+    theta = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    pts = np.column_stack([np.cos(theta), np.sin(theta)])
+    pts = pts + 0.05 * np.random.randn(n, 2)
+
+    rips = gudhi.RipsComplex(points=pts.tolist(), max_edge_length=eps)
+    st = rips.create_simplex_tree(max_dimension=max_dim)
+    K = SimplicialComplex([tuple(s) for s, _ in st.get_simplices()])
+    return K, st
+
+
+# =============================================================
+# SWEEP 1: fix n = 40, vary epsilon
+# =============================================================
+
+def sweep_epsilon(n=40, eps_values=(0.20, 0.25, 0.30, 0.40, 0.50, 0.65, 0.80)):
+    print("=" * 88)
+    print(f"SWEEP 1:  n = {n} points, varying epsilon")
+    print("=" * 88)
+    print(f"{'eps':>6} {'|K|':>8} {'|K prime|':>10} {'collapses':>10} "
+          f"{'reduction':>10} {'min cofaces':>12} {'beta':>12} {'match':>6}")
+    print("-" * 88)
+
+    results = []
+    for eps in eps_values:
+        K, _ = make_circle_rips(n, eps, max_dim=2)
+        if K.num_simplices() == 0:
+            continue
+
+        h1 = compute_homology(K)
+        Kc, nc = collapse(K)
+        h2 = compute_homology(Kc)
+
+        match = all(h1.get(k, 0) == h2.get(k, 0) for k in set(h1) | set(h2))
+        betti = tuple(h1.get(k, 0) for k in range(2))     # beta_0, beta_1 only
+        before, after = K.num_simplices(), Kc.num_simplices()
+        reduction = 100.0 * (before - after) / before if before else 0.0
+        mcf = min_coface_count(K)
+
+        results.append({'eps': eps, 'before': before, 'after': after,
+                        'collapses': nc, 'reduction': reduction,
+                        'min_coface': mcf, 'betti': betti, 'match': match})
+
+        print(f"{eps:>6.2f} {before:>8} {after:>10} {nc:>10} "
+              f"{reduction:>9.1f}% {str(mcf):>12} {str(betti):>12} "
+              f"{'yes' if match else 'NO':>6}")
+
+    return results
+
+
+# =============================================================
+# SWEEP 2: fix epsilon in the sparse regime, vary n
+# =============================================================
+
+def sweep_n(eps=0.30, n_values=(20, 40, 60, 80, 100, 150)):
+    print()
+    print("=" * 88)
+    print(f"SWEEP 2:  epsilon = {eps} (sparse regime), varying n")
+    print("=" * 88)
+    print(f"{'n':>5} {'|K|':>8} {'|K prime|':>10} {'collapses':>10} "
+          f"{'reduction':>10} {'t_orig':>9} {'t_coll':>9} {'t_red':>9} {'beta':>10}")
+    print("-" * 88)
+
+    results = []
+    for n in n_values:
+        K, _ = make_circle_rips(n, eps, max_dim=2)
+        if K.num_simplices() == 0:
+            continue
+
+        t0 = time.time(); h1 = compute_homology(K);  t_orig = time.time() - t0
+        t0 = time.time(); Kc, nc = collapse(K);       t_coll = time.time() - t0
+        t0 = time.time(); h2 = compute_homology(Kc);  t_red = time.time() - t0
+
+        match = all(h1.get(k, 0) == h2.get(k, 0) for k in set(h1) | set(h2))
+        betti = tuple(h1.get(k, 0) for k in range(2))
+        before, after = K.num_simplices(), Kc.num_simplices()
+        reduction = 100.0 * (before - after) / before if before else 0.0
+
+        results.append({'n': n, 'before': before, 'after': after,
+                        'collapses': nc, 'reduction': reduction,
+                        't_orig': t_orig, 't_coll': t_coll, 't_red': t_red,
+                        'betti': betti, 'match': match})
+
+        print(f"{n:>5} {before:>8} {after:>10} {nc:>10} {reduction:>9.1f}% "
+              f"{t_orig:>9.4f} {t_coll:>9.4f} {t_red:>9.4f} {str(betti):>10}")
+
+    return results
+
+
+# =============================================================
+# LaTeX table rows
+# =============================================================
+
+def latex_rows(sweep1, sweep2):
+    print()
+    print("=" * 88)
+    print("LATEX ROWS -- density table")
+    print("=" * 88)
+    for r in sweep1:
+        print(f"{r['eps']:.2f} & {r['before']} & {r['after']} & {r['collapses']} & "
+              f"{r['reduction']:.1f}\\% & {r['min_coface']} & ${r['betti']}$ \\\\")
+
+    print()
+    print("=" * 88)
+    print("LATEX ROWS -- scaling table")
+    print("=" * 88)
+    for r in sweep2:
+        print(f"{r['n']} & {r['before']} & {r['after']} & {r['collapses']} & "
+              f"{r['reduction']:.1f}\\% & {r['t_orig']:.4f} & {r['t_coll']:.4f} & "
+              f"{r['t_red']:.4f} & ${r['betti']}$ \\\\")
+
+
+# =============================================================
+# figure
+# =============================================================
+
+def make_figure(sweep1, sweep2, filename='collapse_density.png'):
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+
+    ax = axes[0]
+    ax.plot([r['eps'] for r in sweep1], [r['reduction'] for r in sweep1],
+            'o-', color='#534AB7', linewidth=2, markersize=7)
+    ax.set_xlabel(r'scale $\epsilon$')
+    ax.set_ylabel('simplices removed (%)')
+    ax.set_title('(a) Collapse effectiveness falls with density')
+    ax.grid(alpha=0.3)
+
+    ax = axes[1]
+    ax.plot([r['eps'] for r in sweep1], [r['min_coface'] for r in sweep1],
+            's-', color='#C1553B', linewidth=2, markersize=7)
+    ax.axhline(1, ls='--', color='gray', label='free face threshold')
+    ax.set_xlabel(r'scale $\epsilon$')
+    ax.set_ylabel('minimum coface count')
+    ax.set_title('(b) No free faces once min coface count exceeds 1')
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    ax = axes[2]
+    ax.plot([r['before'] for r in sweep2], [r['t_orig'] for r in sweep2],
+            'o-', label='homology on $K$', linewidth=2)
+    ax.plot([r['after'] for r in sweep2], [r['t_red'] for r in sweep2],
+            's-', label="homology on $K'$", linewidth=2)
+    ax.set_xlabel('simplices')
+    ax.set_ylabel('time (s)')
+    ax.set_title('(c) Runtime before and after collapse')
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    print(f"\nsaved {filename}")
+
+
+# =============================================================
+
+if __name__ == "__main__":
+    s1 = sweep_epsilon()
+    s2 = sweep_n()
+    latex_rows(s1, s2)
+    make_figure(s1, s2)
